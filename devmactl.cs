@@ -24,8 +24,13 @@ var AllowedCommands = new Dictionary<string, HashSet<string>>(StringComparer.Ord
     {
         "--version",
         "version",
+        "context show",
         "info --format {{.NCPU}}",
         "info --format {{.MemTotal}}"
+    },
+    ["osascript"] = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "-e tell application \"Docker\" to quit"
     },
     ["node"] = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -46,6 +51,18 @@ var AllowedCommands = new Dictionary<string, HashSet<string>>(StringComparer.Ord
 var app = builder.Build();
 
 var wwwroot = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
+
+app.Use(async (ctx, next) =>
+{
+    if (ctx.Request.Path.StartsWithSegments("/api"))
+    {
+        ctx.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+        ctx.Response.Headers.Pragma = "no-cache";
+        ctx.Response.Headers.Expires = "0";
+    }
+
+    await next();
+});
 
 app.UseStaticFiles(new StaticFileOptions
 {
@@ -88,6 +105,13 @@ app.MapPost("/api/colima/stop", async ctx =>
     await ctx.Response.WriteAsync($"{{\"ok\":{(r.success ? "true" : "false")},\"output\":{JsonString(r.output)}}}");
 });
 
+app.MapPost("/api/docker/stop", async ctx =>
+{
+    var r = await StopDocker();
+    ctx.Response.ContentType = "application/json";
+    await ctx.Response.WriteAsync($"{{\"ok\":{(r.success ? "true" : "false")},\"output\":{JsonString(r.output)}}}");
+});
+
 Console.WriteLine("devmachinectl running → http://localhost:5050");
 await app.RunAsync();
 
@@ -99,7 +123,7 @@ async Task<string> GetColimaJson()
     if (!r.success && IsNotFound(r.output))
         return "{\"installed\":false}";
 
-    bool running = r.success && r.output.Contains("Running");
+    bool running = r.success && r.output.Contains("running", StringComparison.OrdinalIgnoreCase);
     var list = await RunCommand("colima", "list");
     return $"{{\"installed\":true,\"running\":{(running ? "true" : "false")},\"raw\":{JsonString(r.output.Trim())},\"list\":{JsonString(list.output.Trim())}}}";
 }
@@ -110,20 +134,44 @@ async Task<string> GetDockerJson()
     if (!ver.success && IsNotFound(ver.output))
         return "{\"installed\":false}";
 
-    bool running = ver.success;
+    var cpuR = await RunCommand("docker", "info --format {{.NCPU}}");
+    bool running = cpuR.success;
     string version = ver.output.Trim();
-    string cpus = "", memory = "";
+    string cpus = "", memory = "", context = "";
 
     if (running)
     {
-        var cpuR = await RunCommand("docker", "info --format {{.NCPU}}");
         var memR = await RunCommand("docker", "info --format {{.MemTotal}}");
         if (cpuR.success) cpus = cpuR.output.Trim();
         if (memR.success && long.TryParse(memR.output.Trim(), out var bytes))
             memory = FormatBytes(bytes);
     }
 
-    return $"{{\"installed\":true,\"running\":{(running ? "true" : "false")},\"version\":{JsonString(version)},\"cpus\":{JsonString(cpus)},\"memory\":{JsonString(memory)}}}";
+    var contextR = await RunCommand("docker", "context show");
+    if (contextR.success) context = contextR.output.Trim();
+
+    return $"{{\"installed\":true,\"running\":{(running ? "true" : "false")},\"version\":{JsonString(version)},\"context\":{JsonString(context)},\"cpus\":{JsonString(cpus)},\"memory\":{JsonString(memory)}}}";
+}
+
+async Task<(bool success, string output)> StopDocker()
+{
+    // If Docker is backed by Colima, stopping Colima also stops the Docker daemon.
+    var contextR = await RunCommand("docker", "context show");
+    if (contextR.success && contextR.output.Contains("colima", StringComparison.OrdinalIgnoreCase))
+    {
+        var colimaStop = await RunCommand("colima", "stop");
+        if (colimaStop.success)
+            return (true, "Docker context is colima. Colima has been stopped.");
+    }
+
+    // On macOS with Docker Desktop, quit the app to stop the daemon.
+    var quitDesktop = await RunCommand("osascript", "-e tell application \"Docker\" to quit");
+    if (quitDesktop.success)
+        return (true, "Docker Desktop quit signal sent.");
+
+    return (false, contextR.success
+        ? $"Unable to stop Docker. Context: {contextR.output.Trim()}"
+        : "Unable to determine Docker context or stop Docker.");
 }
 
 async Task<string> GetNodeJson()

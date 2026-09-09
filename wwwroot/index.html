@@ -40,6 +40,7 @@
           <span class="badge" id="badge-docker">…</span>
         </div>
         <div class="card-body" id="body-docker">Loading…</div>
+        <div class="card-actions" id="actions-docker"></div>
       </div>
     </section>
 
@@ -99,7 +100,7 @@
     async function loadActiveTab() {
       document.getElementById('last-updated').textContent = '';
       try {
-        const res = await fetch('/api/status/' + activeTab);
+        const res = await fetch('/api/status/' + activeTab, { cache: 'no-store' });
         const data = await res.json();
         const renderers = { colima: renderColima, docker: renderDocker, node: renderNode, dotnet: renderDotnet };
         renderers[activeTab]?.(data);
@@ -154,19 +155,32 @@
 
     function renderDocker(d) {
       const body = document.getElementById('body-docker');
+      const actions = document.getElementById('actions-docker');
       if (!d.installed) {
         setBadge('badge-docker', 'not installed', 'badge-off');
         setTabBadge('docker', '✕', 'tbadge-off');
         body.textContent = 'Docker is not installed on this machine.';
+        actions.innerHTML = '';
         return;
       }
       setBadge('badge-docker', d.running ? 'running' : 'stopped', d.running ? 'badge-on' : 'badge-off');
       setTabBadge('docker', d.running ? '●' : '○', d.running ? 'tbadge-on' : 'tbadge-off');
       let html = '';
       if (d.version) html += kv('Version', d.version);
+      if (d.context) html += kv('Context', d.context);
       if (d.cpus)    html += kv('CPUs', d.cpus);
       if (d.memory)  html += kv('Memory', d.memory);
       body.innerHTML = html || 'Docker daemon is not running.';
+
+      actions.innerHTML = '';
+      if (d.running) {
+        const btn = mkBtn('Stop', 'btn-danger', async () => {
+          btn.disabled = true;
+          await fetch('/api/docker/stop', { method: 'POST' });
+          await loadActiveTab();
+        });
+        actions.appendChild(btn);
+      }
     }
 
     function renderNode(n) {

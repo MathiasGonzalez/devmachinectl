@@ -9,7 +9,7 @@
 ## Features
 
 - Control Colima (start, stop, status, list)
-- Control Docker (version, info)
+- Control Docker (version, info, stop)
 - Control Node.js (version)
 - Control npm (version)
 - Control .NET SDK (version, sdk check, list runtimes)
