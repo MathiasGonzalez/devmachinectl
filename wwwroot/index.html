@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>devmachinectl</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>devmachinectl</h1>
+    <span class="subtitle">local dev machine control panel</span>
+  </header>
+
+  <nav class="tabs" id="tab-bar">
+    <button class="tab active" data-tab="colima">🐳 Colima <span class="tab-badge" id="tbadge-colima"></span></button>
+    <button class="tab" data-tab="docker">📦 Docker <span class="tab-badge" id="tbadge-docker"></span></button>
+    <button class="tab" data-tab="node">🟩 Node.js <span class="tab-badge" id="tbadge-node"></span></button>
+    <button class="tab" data-tab="dotnet">🔵 .NET <span class="tab-badge" id="tbadge-dotnet"></span></button>
+  </nav>
+
+  <main id="dashboard">
+    <!-- Colima -->
+    <section class="panel active" id="panel-colima">
+      <div class="card">
+        <div class="card-header">
+          <span class="icon">🐳</span><h2>Colima</h2>
+          <span class="badge" id="badge-colima">…</span>
+        </div>
+        <div class="card-body" id="body-colima">Loading…</div>
+        <div class="card-actions" id="actions-colima"></div>
+      </div>
+    </section>
+
+    <!-- Docker -->
+    <section class="panel" id="panel-docker">
+      <div class="card">
+        <div class="card-header">
+          <span class="icon">📦</span><h2>Docker</h2>
+          <span class="badge" id="badge-docker">…</span>
+        </div>
+        <div class="card-body" id="body-docker">Loading…</div>
+      </div>
+    </section>
+
+    <!-- Node -->
+    <section class="panel" id="panel-node">
+      <div class="card">
+        <div class="card-header">
+          <span class="icon">🟩</span><h2>Node.js</h2>
+          <span class="badge" id="badge-node">…</span>
+        </div>
+        <div class="card-body" id="body-node">Loading…</div>
+      </div>
+    </section>
+
+    <!-- .NET -->
+    <section class="panel" id="panel-dotnet">
+      <div class="card">
+        <div class="card-header">
+          <span class="icon">🔵</span><h2>.NET</h2>
+          <span class="badge" id="badge-dotnet">…</span>
+        </div>
+        <div class="card-body" id="body-dotnet">Loading…</div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <button id="btn-refresh">↻ Refresh</button>
+    <span id="last-updated"></span>
+  </footer>
+
+  <script>
+    // ── tab state ──────────────────────────────────────────────────────────────
+    let activeTab = 'colima';
+    let refreshTimer = null;
+
+    document.getElementById('tab-bar').addEventListener('click', e => {
+      const btn = e.target.closest('[data-tab]');
+      if (!btn) return;
+      switchTab(btn.dataset.tab);
+    });
+
+    function switchTab(name) {
+      activeTab = name;
+      document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+      document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+      loadActiveTab();
+      scheduleRefresh();
+    }
+
+    function scheduleRefresh() {
+      clearInterval(refreshTimer);
+      refreshTimer = setInterval(loadActiveTab, 20000);
+    }
+
+    // ── fetch helpers ──────────────────────────────────────────────────────────
+    async function loadActiveTab() {
+      document.getElementById('last-updated').textContent = '';
+      try {
+        const res = await fetch('/api/status/' + activeTab);
+        const data = await res.json();
+        const renderers = { colima: renderColima, docker: renderDocker, node: renderNode, dotnet: renderDotnet };
+        renderers[activeTab]?.(data);
+        document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+      } catch (e) { console.error(e); }
+    }
+
+    // ── renderers ──────────────────────────────────────────────────────────────
+    function setBadge(id, text, cls) {
+      const el = document.getElementById(id);
+      el.textContent = text;
+      el.className = 'badge ' + cls;
+    }
+
+    function setTabBadge(tab, text, cls) {
+      const el = document.getElementById('tbadge-' + tab);
+      el.textContent = text;
+      el.className = 'tab-badge ' + cls;
+    }
+
+    function renderColima(c) {
+      const body = document.getElementById('body-colima');
+      const actions = document.getElementById('actions-colima');
+      if (!c.installed) {
+        setBadge('badge-colima', 'not installed', 'badge-off');
+        setTabBadge('colima', '✕', 'tbadge-off');
+        body.textContent = 'Colima is not installed on this machine.';
+        actions.innerHTML = '';
+        return;
+      }
+      const state = c.running ? 'running' : 'stopped';
+      setBadge('badge-colima', state, c.running ? 'badge-on' : 'badge-off');
+      setTabBadge('colima', c.running ? '●' : '○', c.running ? 'tbadge-on' : 'tbadge-off');
+      body.innerHTML = '<pre>' + escHtml(c.raw || '') + '</pre>';
+      actions.innerHTML = '';
+      if (c.running) {
+        const btn = mkBtn('Stop', 'btn-danger', async () => {
+          btn.disabled = true;
+          await fetch('/api/colima/stop', { method: 'POST' });
+          await loadActiveTab();
+        });
+        actions.appendChild(btn);
+      } else {
+        const btn = mkBtn('Start', 'btn-primary', async () => {
+          btn.disabled = true;
+          await fetch('/api/colima/start', { method: 'POST' });
+          await loadActiveTab();
+        });
+        actions.appendChild(btn);
+      }
+    }
+
+    function renderDocker(d) {
+      const body = document.getElementById('body-docker');
+      if (!d.installed) {
+        setBadge('badge-docker', 'not installed', 'badge-off');
+        setTabBadge('docker', '✕', 'tbadge-off');
+        body.textContent = 'Docker is not installed on this machine.';
+        return;
+      }
+      setBadge('badge-docker', d.running ? 'running' : 'stopped', d.running ? 'badge-on' : 'badge-off');
+      setTabBadge('docker', d.running ? '●' : '○', d.running ? 'tbadge-on' : 'tbadge-off');
+      let html = '';
+      if (d.version) html += kv('Version', d.version);
+      if (d.cpus)    html += kv('CPUs', d.cpus);
+      if (d.memory)  html += kv('Memory', d.memory);
+      body.innerHTML = html || 'Docker daemon is not running.';
+    }
+
+    function renderNode(n) {
+      const body = document.getElementById('body-node');
+      if (!n.installed) {
+        setBadge('badge-node', 'not installed', 'badge-off');
+        setTabBadge('node', '✕', 'tbadge-off');
+        body.textContent = 'Node.js is not installed on this machine.';
+        return;
+      }
+      setBadge('badge-node', 'installed', 'badge-on');
+      setTabBadge('node', '●', 'tbadge-on');
+      body.innerHTML = kv('Node', n.version) + (n.npm ? kv('npm', n.npm) : '');
+    }
+
+    function renderDotnet(d) {
+      const body = document.getElementById('body-dotnet');
+      if (!d.installed) {
+        setBadge('badge-dotnet', 'not installed', 'badge-off');
+        setTabBadge('dotnet', '✕', 'tbadge-off');
+        body.textContent = '.NET is not installed on this machine.';
+        return;
+      }
+      setBadge('badge-dotnet', d.version, 'badge-on');
+      setTabBadge('dotnet', '●', 'tbadge-on');
+      let html = kv('Version', d.version);
+      if (d.runtimes) html += '<h3 class="section-title">Runtimes</h3><pre>' + escHtml(d.runtimes) + '</pre>';
+      if (d.sdkCheck) html += '<h3 class="section-title">SDK Check</h3><pre>' + escHtml(d.sdkCheck) + '</pre>';
+      body.innerHTML = html;
+    }
+
+    function kv(label, val) {
+      return `<div class="kv"><span>${escHtml(label)}</span><span>${escHtml(val)}</span></div>`;
+    }
+
+    function escHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function mkBtn(label, cls, handler) {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.className = cls;
+      b.addEventListener('click', handler);
+      return b;
+    }
+
+    // ── init ───────────────────────────────────────────────────────────────────
+    document.getElementById('btn-refresh').addEventListener('click', loadActiveTab);
+    loadActiveTab();
+    scheduleRefresh();
+  </script>
+</body>
+</html>
+
