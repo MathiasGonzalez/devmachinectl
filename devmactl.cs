@@ -11,6 +11,38 @@ using Microsoft.Extensions.FileProviders;
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls("http://localhost:5050");
 
+var AllowedCommands = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+{
+    ["colima"] = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "status",
+        "list",
+        "start",
+        "stop"
+    },
+    ["docker"] = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "--version",
+        "version",
+        "info --format {{.NCPU}}",
+        "info --format {{.MemTotal}}"
+    },
+    ["node"] = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "--version"
+    },
+    ["npm"] = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "--version"
+    },
+    ["dotnet"] = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "--version",
+        "sdk check",
+        "--list-runtimes"
+    }
+};
+
 var app = builder.Build();
 
 var wwwroot = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
@@ -61,7 +93,7 @@ await app.RunAsync();
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-static async Task<string> GetColimaJson()
+async Task<string> GetColimaJson()
 {
     var r = await RunCommand("colima", "status");
     if (!r.success && IsNotFound(r.output))
@@ -72,7 +104,7 @@ static async Task<string> GetColimaJson()
     return $"{{\"installed\":true,\"running\":{(running ? "true" : "false")},\"raw\":{JsonString(r.output.Trim())},\"list\":{JsonString(list.output.Trim())}}}";
 }
 
-static async Task<string> GetDockerJson()
+async Task<string> GetDockerJson()
 {
     var ver = await RunCommand("docker", "--version");
     if (!ver.success && IsNotFound(ver.output))
@@ -94,7 +126,7 @@ static async Task<string> GetDockerJson()
     return $"{{\"installed\":true,\"running\":{(running ? "true" : "false")},\"version\":{JsonString(version)},\"cpus\":{JsonString(cpus)},\"memory\":{JsonString(memory)}}}";
 }
 
-static async Task<string> GetNodeJson()
+async Task<string> GetNodeJson()
 {
     var ver = await RunCommand("node", "--version");
     if (!ver.success)
@@ -103,7 +135,7 @@ static async Task<string> GetNodeJson()
     return $"{{\"installed\":true,\"version\":{JsonString(ver.output.Trim())},\"npm\":{JsonString(npm.output.Trim())}}}";
 }
 
-static async Task<string> GetDotnetJson()
+async Task<string> GetDotnetJson()
 {
     var ver = await RunCommand("dotnet", "--version");
     if (!ver.success)
@@ -113,8 +145,13 @@ static async Task<string> GetDotnetJson()
     return $"{{\"installed\":true,\"version\":{JsonString(ver.output.Trim())},\"sdkCheck\":{JsonString(sdks.output.Trim())},\"runtimes\":{JsonString(runtimes.output.Trim())}}}";
 }
 
-static async Task<(bool success, string output)> RunCommand(string cmd, string args)
+async Task<(bool success, string output)> RunCommand(string cmd, string args)
 {
+    if (!IsCommandAllowed(cmd, args))
+    {
+        return (false, $"Command not allowed: {cmd} {args}");
+    }
+
     try
     {
         var psi = new ProcessStartInfo(cmd, args)
@@ -135,11 +172,37 @@ static async Task<(bool success, string output)> RunCommand(string cmd, string a
     }
 }
 
-static bool IsNotFound(string msg) =>
+bool IsCommandAllowed(string cmd, string args)
+{
+    if (string.IsNullOrWhiteSpace(cmd) || cmd.Contains(' '))
+        return false;
+
+    if (!AllowedCommands.TryGetValue(cmd, out var allowedArgs))
+        return false;
+
+    var normalizedArgs = NormalizeCommandArgs(args);
+    if (string.IsNullOrWhiteSpace(normalizedArgs))
+        return false;
+
+    return allowedArgs.Contains(normalizedArgs);
+}
+
+string NormalizeCommandArgs(string args)
+{
+    if (string.IsNullOrWhiteSpace(args))
+        return string.Empty;
+
+    var normalized = string.Join(" ",
+        args.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+    return normalized.Trim();
+}
+
+bool IsNotFound(string msg) =>
     msg.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
     msg.Contains("No such file", StringComparison.OrdinalIgnoreCase);
 
-static string JsonString(string? s)
+string JsonString(string? s)
 {
     if (s is null) return "null";
     var sb = new StringBuilder(s.Length + 2);
@@ -163,7 +226,7 @@ static string JsonString(string? s)
     return sb.ToString();
 }
 
-static string FormatBytes(long bytes)
+string FormatBytes(long bytes)
 {
     if (bytes <= 0) return "0 B";
     string[] units = ["B", "KB", "MB", "GB", "TB"];
