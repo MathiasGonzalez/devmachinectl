@@ -32,9 +32,15 @@ app.MapGet("/api/status", async ctx =>
     var colima = await GetColimaJson();
     var docker = await GetDockerJson();
     var node   = await GetNodeJson();
+    var dotnet = await GetDotnetJson();
     ctx.Response.ContentType = "application/json";
-    await ctx.Response.WriteAsync($"{{\"colima\":{colima},\"docker\":{docker},\"node\":{node}}}");
+    await ctx.Response.WriteAsync($"{{\"colima\":{colima},\"docker\":{docker},\"node\":{node},\"dotnet\":{dotnet}}}");
 });
+
+app.MapGet("/api/status/colima",  async ctx => { ctx.Response.ContentType = "application/json"; await ctx.Response.WriteAsync(await GetColimaJson()); });
+app.MapGet("/api/status/docker",  async ctx => { ctx.Response.ContentType = "application/json"; await ctx.Response.WriteAsync(await GetDockerJson()); });
+app.MapGet("/api/status/node",    async ctx => { ctx.Response.ContentType = "application/json"; await ctx.Response.WriteAsync(await GetNodeJson()); });
+app.MapGet("/api/status/dotnet",  async ctx => { ctx.Response.ContentType = "application/json"; await ctx.Response.WriteAsync(await GetDotnetJson()); });
 
 app.MapPost("/api/colima/start", async ctx =>
 {
@@ -95,6 +101,16 @@ static async Task<string> GetNodeJson()
         return "{\"installed\":false}";
     var npm = await RunCommand("npm", "--version");
     return $"{{\"installed\":true,\"version\":{JsonString(ver.output.Trim())},\"npm\":{JsonString(npm.output.Trim())}}}";
+}
+
+static async Task<string> GetDotnetJson()
+{
+    var ver = await RunCommand("dotnet", "--version");
+    if (!ver.success)
+        return "{\"installed\":false}";
+    var sdks = await RunCommand("dotnet", "sdk check");
+    var runtimes = await RunCommand("dotnet", "--list-runtimes");
+    return $"{{\"installed\":true,\"version\":{JsonString(ver.output.Trim())},\"sdkCheck\":{JsonString(sdks.output.Trim())},\"runtimes\":{JsonString(runtimes.output.Trim())}}}";
 }
 
 static async Task<(bool success, string output)> RunCommand(string cmd, string args)
